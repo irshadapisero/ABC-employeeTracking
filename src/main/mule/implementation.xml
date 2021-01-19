@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:email="http://www.mulesoft.org/schema/mule/email" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd">
+	<flow name="DBtoSalesforceFlow" doc:id="f98de1c1-1a98-46b5-8bc4-0c838eab5d5e" >
+		<scheduler doc:name="Scheduler Daily 8:00PM CST" doc:id="ec0127b7-376f-4dfe-9b8e-924d827e6e2e" >
+			<scheduling-strategy >
+				<cron expression="${scheduler.expression}" timeZone="America/Los_Angeles" />
+			</scheduling-strategy>
+		</scheduler>
+		<db:select doc:name="Select" doc:id="966b9ff7-03d8-4eab-a3cc-797520e21aee" config-ref="Database_Config">
+			<db:sql ><![CDATA[select * from employeeTable]]></db:sql>
+		</db:select>
+		<ee:transform doc:name="Transform Message" doc:id="83c3d817-58ab-44c5-a0dd-7b540214f7ea" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+payload map(item,index)-> {
+	FirstName:item.e_fname,
+	LastName:item.e_lname,
+	Email:item.e_email,
+	MailingCity: item.e_city,
+	Description:item.e_project
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<batch:job jobName="implementationBatch_Job" doc:id="4eb19fd7-d3ca-47d3-b6f9-9a726e4746da" >
+			<batch:process-records >
+				<batch:step name="Batch_Step" doc:id="ca36ec2f-f7f1-440d-8783-8167d56060ea" >
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="5ee27878-d63d-4fde-aebe-410aee47de31" size="200">
+						<salesforce:create type="Contact" doc:name="Create" doc:id="75c2952e-377c-462d-baa2-8697ca45bbe7" config-ref="Salesforce_Config">
+			<salesforce:records><![CDATA[#[output application/java
+---
+[{
+	LastName: payload.LastName,
+	FirstName: payload.FirstName,
+	MailingCity: payload.MailingCity,
+	Email: payload.Email,
+	Description: payload.Description
+}]]]]></salesforce:records>
+		</salesforce:create>
+					</batch:aggregator>
+				</batch:step>
+				<batch:step name="Batch_Step1" doc:id="ca96d544-7d29-482e-9074-5514db4d2484" acceptPolicy="ONLY_FAILURES">
+					<logger level="INFO" doc:name="Log Failure" doc:id="6ad7c053-35a8-4c7b-8c18-4b70b42414ff" message="#['Failure: ' ++  write(payload, 'application/json', {'indent': 'false'})]"/>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Log Results" doc:id="8d60405a-36e1-46a9-bdf2-bebd57198484" message="#[payload.loadedRecords ++ ' Loaded Records ' ++ payload.failedRecords ++' Failed Records']"/>
+			</batch:on-complete>
+		</batch:job>
+		<ee:transform doc:name="Transform Message" doc:id="5d93c71c-d0cf-480a-b297-71c00a3be5ef" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="902efadd-b811-47d6-8678-da55a9e4d86f" message="#[payload]"/>
+		<error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="f90bf54b-e8ba-472d-ae94-1d245b067bc0" type="ANY">
+				<email:send doc:name="Send" doc:id="8b5a0e20-c49f-4494-b46e-49279bf9a50d" fromAddress="${email.user}" config-ref="Email-SMTP" subject="ABC-Employee Tracking Error">
+					<email:to-addresses>
+						<email:to-address value="irshad.ahmad@apisero.com" />
+					</email:to-addresses>
+					<email:body>
+						<email:content><![CDATA[#[output text/plain --- error.description]]]></email:content>
+					</email:body>
+				</email:send>
+			</on-error-continue>
+		</error-handler>
+	</flow>
+</mule>
